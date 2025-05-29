@@ -236,15 +236,6 @@ void setup() {
     }
   }
 
-  if (!firebaseConnected) {
-    Serial.println("Failed to connect to Firebase. Starting configuration portal.");
-    configMode = true;
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(WIFI_SSID_AP.c_str());
-    mainConfigServer();
-    return;
-  }
-
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT);
@@ -326,6 +317,14 @@ void processCommand(String command) {
       Serial.printf("Speed set to: %d\n", currentSpeed);
       analogWrite(SPEED_PIN_1, currentSpeed);
       analogWrite(SPEED_PIN_2, currentSpeed);
+
+      // Reset the trigger command from speed to none
+      if(!Firebase.RTDB.setString(&fbdo, commandPath, "none"))
+      {
+        Serial.printf("Failed to reset speed command: %s\n", fbdo.errorReason().c_str());
+      } else {
+        Serial.println("Speed command reset to 'none'");
+      }
     }
   }
   else {
