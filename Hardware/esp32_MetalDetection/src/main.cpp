@@ -101,16 +101,22 @@ void mainConfigServer() {
 unsigned long lastWifiCheckTime = 0;
 const unsigned long wifiCheckInterval = 30000;
 
+// Debounce-related variables
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50; // in milliseconds
+bool lastMetalState = false;
+bool metalDetected = false;
+
 // Motor direction pins
 #define IN1 13
 #define IN2 12
 #define IN3 14
 #define IN4 27
-// Speed control pin
-#define SPEED_PIN_1 5
-#define SPEED_PIN_2 18
 
-int currentSpeed = 200;
+// Metal detection Pins
+#define METAL_DETECT_PIN 5
+// Buzzer Pin
+#define BUZZER_PIN 18
 
 // Firebase configuration
 #define DATABASE_URL "https://bot-projects-193c9-default-rtdb.asia-southeast1.firebasedatabase.app"
@@ -140,6 +146,8 @@ void stopMotors();
 void processCommand(String command);
 void mainConfigServer();
 void connectToFirebase();
+void sendDetectionTrue();
+void sendDetectionFalse();
 
 void connectToFirebase() {
   // Configure Firebase
@@ -240,8 +248,8 @@ void setup() {
   pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT);
   pinMode(IN4, OUTPUT);
-  pinMode(SPEED_PIN_1, OUTPUT);
-  pinMode(SPEED_PIN_2, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(METAL_DETECT_PIN, INPUT);
 
   Serial.println("Starting main loop...");
 }
@@ -255,25 +263,49 @@ void loop() {
     checkWiFiConnection();
     lastWifiCheckTime = millis();
   }
+
+  // Debounced metal detection
+  if (METAL_DETECT_PIN >= 0) {
+    bool reading = digitalRead(METAL_DETECT_PIN) == LOW;
+    if (reading != lastMetalState) {
+      lastDebounceTime = millis();
+    }
+    if ((millis() - lastDebounceTime) > debounceDelay) {
+      if (reading != metalDetected) {
+        metalDetected = reading;
+
+        if (metalDetected) {
+          Serial.println("Metal detected!");
+          digitalWrite(BUZZER_PIN, HIGH);
+          sendDetectionTrue();
+        } else {
+          Serial.println("No metal detected.");
+          digitalWrite(BUZZER_PIN, LOW);
+          sendDetectionFalse();
+        }
+      }
+    }
+    lastMetalState = reading;
+  }
 }
 
 // Movement functions
-void moveBackward() {
+void turnRight() {
   digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
   digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
 }
 
-void moveForward() {
+void turnLeft() {
   digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
   digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
 }
 
-void turnLeft() {
+void moveBackward() {
   digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
   digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
 }
 
-void turnRight() {
+void moveForward() {
   digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
   digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
 }
@@ -281,6 +313,34 @@ void turnRight() {
 void stopMotors() {
   digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
   digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
+}
+
+void sendDetectionTrue() {
+  if (!Firebase.ready()) {
+    Serial.println("Firebase not ready, reconnecting...");
+    connectToFirebase();
+  }
+  String newCommandPath = mainPath;
+  newCommandPath += "/detection";
+  if (Firebase.RTDB.setBool(&fbdo, newCommandPath, true)) {
+    Serial.printf("Command sent to Firebase: %s\n", newCommandPath.c_str());
+  } else {
+    Serial.printf("Failed to send command to Firebase: %s\n", fbdo.errorReason().c_str());
+  }
+}
+
+void sendDetectionFalse() {
+  if (!Firebase.ready()) {
+    Serial.println("Firebase not ready, reconnecting...");
+    connectToFirebase();
+  }
+  String newCommandPath = mainPath;
+  newCommandPath += "/detection";
+  if (Firebase.RTDB.setBool(&fbdo, newCommandPath, false)) {
+    Serial.printf("Command sent to Firebase: %s\n", newCommandPath.c_str());
+  } else {
+    Serial.printf("Failed to send command to Firebase: %s\n", fbdo.errorReason().c_str());
+  }
 }
 
 void processCommand(String command) {
@@ -303,29 +363,6 @@ void processCommand(String command) {
   else if (command == "S"){
     stopMotors();
     Serial.println("Stopped");
-  }
-  else if (command == "speed"){
-    String speedPath = mainPath;
-    speedPath+= "/triggers/speed";
-    if (!Firebase.RTDB.getInt(&fbdo, speedPath))
-    {
-        Serial.printf("Failed to get speed: %s\n", fbdo.errorReason().c_str());
-        return;
-    } else {
-      Serial.println("Speed value retrieved from Firebase");
-      currentSpeed = fbdo.intData();
-      Serial.printf("Speed set to: %d\n", currentSpeed);
-      analogWrite(SPEED_PIN_1, currentSpeed);
-      analogWrite(SPEED_PIN_2, currentSpeed);
-
-      // Reset the trigger command from speed to none
-      if(!Firebase.RTDB.setString(&fbdo, commandPath, "none"))
-      {
-        Serial.printf("Failed to reset speed command: %s\n", fbdo.errorReason().c_str());
-      } else {
-        Serial.println("Speed command reset to 'none'");
-      }
-    }
   }
   else {
     Serial.println("Unknown command: ");

@@ -6,41 +6,22 @@ import {
   ArrowRight,
   Wifi,
   AlertTriangle,
-  Square
+  Square,
+  Check,
+  XCircle
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { ref, set, onValue } from 'firebase/database';
+import { ref, set, onValue, remove } from 'firebase/database';
 import { database } from '@/firebase/firebaseConfig';
 
 const LiveControlPage = () => {
   const [status, setStatus] = useState('');
   const [showStatusMessage, setShowStatusMessage] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  const [speed, setSpeed] = useState(128);
-
-  const handleSpeedChange = async (value) => {
-    if (connectionStatus !== 'connected') {
-      setStatus('Connection error. Please check your connection.');
-      return;
-    }
-    setSpeed(value);
-    try {
-      const speedRef = ref(database, 'metal-detection-bot/triggers');
-      await set(speedRef, {
-        command: 'speed',
-        speed: value,
-        timestamp: Date.now()
-      });
-    } catch (error) {
-      setStatus('Error setting speed');
-      console.error(error);
-    }
-  };
+  const [metalDetected, setMetalDetected] = useState(null);
 
   useEffect(() => {
     if (status) {
@@ -54,7 +35,7 @@ const LiveControlPage = () => {
 
   useEffect(() => {
     const connectedRef = ref(database, '.info/connected');
-    const unsubscribe = onValue(connectedRef, (snapshot) => {
+    const unsubscribeConnection = onValue(connectedRef, (snapshot) => {
       if (snapshot.val() === true) {
         setConnectionStatus('connected');
       } else {
@@ -62,7 +43,20 @@ const LiveControlPage = () => {
       }
     });
     sendCommand('S');
-    return () => unsubscribe();
+    return () => unsubscribeConnection();
+  }, []);
+
+  useEffect(() => {
+    const detectionRef = ref(database, 'metal-detection-bot/detection');
+    setMetalDetected(null);
+    const setInitialValue = async () => {
+      await remove(detectionRef);
+    };
+    setInitialValue();
+    const unsubscribeDetection = onValue(detectionRef, (snapshot) => {
+      setMetalDetected(snapshot.val());
+    });
+    return () => unsubscribeDetection();
   }, []);
 
   const sendCommand = async (command) => {
@@ -70,7 +64,6 @@ const LiveControlPage = () => {
       const commandRef = ref(database, 'metal-detection-bot/triggers');
       await set(commandRef, {
         command: command,
-        speed: speed,
         timestamp: Date.now(),
       });
     } catch (error) {
@@ -221,58 +214,6 @@ const LiveControlPage = () => {
     );
   };
 
-  const SpeedControl = () => {
-    const presets = [
-      { name: 'Slow', value: 64 },
-      { name: 'Medium', value: 128 },
-      { name: 'Fast', value: 192 },
-      { name: 'Max', value: 255 }
-    ];
-
-    return (
-      <div className="space-y-3 w-full mt-3">
-        <div className="flex justify-between items-center">
-          <h3 className="text-sm font-medium">Speed</h3>
-          <Badge variant="secondary" className="font-medium">
-            {speed}
-          </Badge>
-        </div>
-        
-        <Slider
-          value={[speed]}
-          onValueChange={(value) => {
-            handleSpeedChange(value[0]);
-          }}
-          max={255}
-          step={10}
-          className="w-full"
-        />
-        
-        <div className="flex justify-between text-xs text-muted-foreground px-1">
-          <span>Min</span>
-          <span>Mid</span>
-          <span>Max</span>
-        </div>
-        
-        <div className="flex gap-2 mt-2">
-          {presets.map((preset) => (
-            <Button
-              key={preset.name}
-              onClick={() => {
-                handleSpeedChange(preset.value);
-              }}
-              variant={speed === preset.value ? "default" : "outline"}
-              className="flex-1 h-8"
-              size="sm"
-            >
-              {preset.name}
-            </Button>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className="py-2">
       <div className="max-w-7xl mx-auto px-2 py-0 space-y-6">
@@ -289,7 +230,10 @@ const LiveControlPage = () => {
 
         <div className="grid grid-cols-1 gap-6">
           <Card>
-            <CardContent className="p-6">
+            <CardHeader>
+              <CardTitle>Live Control & Metal Detection</CardTitle>
+            </CardHeader>
+            <CardContent className="p-2">
               <div>
                 {/* Container for all controls to enable flex row layout and centering */}
                 <div className="flex flex-col items-center justify-center">
@@ -298,9 +242,24 @@ const LiveControlPage = () => {
                     {/* Joystick Control (Center) */}
                     <JoystickControl />
                   </div>
-                  <Separator orientation="vertical" className="h-full my-5" />
-                  <div className="flex items-center justify-center">
-                    <SpeedControl />
+                  <Separator orientation="horizontal" className="h-full my-5" />
+                  <div className="flex items-center justify-center p-4">
+                    {metalDetected === null ? (
+                      <Badge variant="outline" className="bg-gray-100 text-gray-700 border-gray-200 text-lg p-3">
+                        <AlertTriangle size={24} className="mr-2" />
+                        Metal Detection: Unknown
+                      </Badge>
+                    ) : metalDetected ? (
+                      <Badge variant="outline" className="bg-green-100 text-green-700 border-green-200 text-lg p-3">
+                        <Check size={24} className="mr-2" />
+                        Metal Detected
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-red-100 text-red-700 border-red-200 text-lg p-3">
+                        <XCircle size={24} className="mr-2" />
+                        No Metal Detected
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </div>
