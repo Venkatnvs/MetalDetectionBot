@@ -47,7 +47,7 @@ const LiveControlPage = () => {
   }, []);
 
   useEffect(() => {
-    const detectionRef = ref(database, 'metal-detection-bot/detection');
+    const detectionRef = ref(database, 'metal-detection-bot-2/detection');
     setMetalDetected(null);
     const setInitialValue = async () => {
       await remove(detectionRef);
@@ -61,7 +61,7 @@ const LiveControlPage = () => {
 
   const sendCommand = async (command) => {
     try {
-      const commandRef = ref(database, 'metal-detection-bot/triggers');
+      const commandRef = ref(database, 'metal-detection-bot-2/triggers');
       await set(commandRef, {
         command: command,
         timestamp: Date.now(),

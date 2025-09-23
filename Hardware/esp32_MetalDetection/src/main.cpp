@@ -129,7 +129,7 @@ FirebaseConfig config;
 bool firebaseConnected = false;
 
 // Firebase real-time database paths
-#define RTDB_PATH "/metal-detection-bot"
+#define RTDB_PATH "/metal-detection-bot-2"
 String mainPath = RTDB_PATH;
 String commandPath;
 
