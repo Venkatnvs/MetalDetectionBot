@@ -4,6 +4,8 @@
 #include "addons/RTDBHelper.h"
 #include <WebServer.h>
 #include <Preferences.h>
+#include <TinyGPS++.h>
+#include <HardwareSerial.h>
 
 String storedSSID;
 String storedPassword;
@@ -101,6 +103,10 @@ void mainConfigServer() {
 unsigned long lastWifiCheckTime = 0;
 const unsigned long wifiCheckInterval = 30000;
 
+// GPS update interval
+unsigned long lastGPSUpdateTime = 0;
+const unsigned long gpsUpdateInterval = 10000; // Update GPS every 10 seconds
+
 // Debounce-related variables
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50; // in milliseconds
@@ -117,6 +123,13 @@ bool metalDetected = false;
 #define METAL_DETECT_PIN 5
 // Buzzer Pin
 #define BUZZER_PIN 18
+
+// GPS Configuration
+#define GPS_RX_PIN 16
+#define GPS_TX_PIN 17
+#define GPS_BAUD 9600
+HardwareSerial gpsSerial(2); // Use Serial2 for GPS
+TinyGPSPlus gps;
 
 // Firebase configuration
 #define DATABASE_URL "https://bot-projects-193c9-default-rtdb.asia-southeast1.firebasedatabase.app"
@@ -148,6 +161,8 @@ void mainConfigServer();
 void connectToFirebase();
 void sendDetectionTrue();
 void sendDetectionFalse();
+void updateGPS();
+void sendGPSLocation(float latitude, float longitude);
 
 void connectToFirebase() {
   // Configure Firebase
@@ -251,12 +266,27 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(METAL_DETECT_PIN, INPUT);
 
+  // Initialize GPS
+  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+  Serial.println("GPS initialized on Serial2");
+
   Serial.println("Starting main loop...");
 }
 
 void loop() {
   server.handleClient();
   if (configMode) return;
+
+  // Update GPS data continuously
+  updateGPS();
+
+  // Periodically update GPS location to Firebase (saves only one latest location)
+  if (millis() - lastGPSUpdateTime > gpsUpdateInterval) {
+    if (gps.location.isValid()) {
+      sendGPSLocation(gps.location.lat(), gps.location.lng());
+    }
+    lastGPSUpdateTime = millis();
+  }
 
   // Check and maintain WiFi connection
   if (millis() - lastWifiCheckTime > wifiCheckInterval) {
@@ -277,6 +307,12 @@ void loop() {
         if (metalDetected) {
           Serial.println("Metal detected!");
           digitalWrite(BUZZER_PIN, HIGH);
+          // Also update GPS location immediately when metal is detected
+          if (gps.location.isValid()) {
+            sendGPSLocation(gps.location.lat(), gps.location.lng());
+          } else {
+            Serial.println("GPS location not valid yet");
+          }
           sendDetectionTrue();
         } else {
           Serial.println("No metal detected.");
@@ -300,12 +336,12 @@ void turnLeft() {
   digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
 }
 
-void moveBackward() {
+void moveForward() {
   digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
   digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
 }
 
-void moveForward() {
+void moveBackward() {
   digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
   digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
 }
@@ -340,6 +376,36 @@ void sendDetectionFalse() {
     Serial.printf("Command sent to Firebase: %s\n", newCommandPath.c_str());
   } else {
     Serial.printf("Failed to send command to Firebase: %s\n", fbdo.errorReason().c_str());
+  }
+}
+
+void updateGPS() {
+  while (gpsSerial.available() > 0) {
+    if (gps.encode(gpsSerial.read())) {
+      if (gps.location.isValid()) {
+        // GPS data is valid, can be used
+      }
+    }
+  }
+}
+
+void sendGPSLocation(float latitude, float longitude) {
+  if (!Firebase.ready()) {
+    Serial.println("Firebase not ready, reconnecting...");
+    connectToFirebase();
+  }
+  String locationPath = mainPath;
+  locationPath += "/location";
+  
+  FirebaseJson json;
+  json.set("latitude", latitude);
+  json.set("longitude", longitude);
+  json.set("timestamp", millis());
+  
+  if (Firebase.RTDB.setJSON(&fbdo, locationPath, &json)) {
+    Serial.printf("GPS location sent to Firebase: %.6f, %.6f\n", latitude, longitude);
+  } else {
+    Serial.printf("Failed to send GPS location to Firebase: %s\n", fbdo.errorReason().c_str());
   }
 }
 

@@ -8,12 +8,15 @@ import {
   AlertTriangle,
   Square,
   Check,
-  XCircle
+  XCircle,
+  MapPin,
+  ExternalLink
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Button } from '@/components/ui/button';
 import { ref, set, onValue, remove } from 'firebase/database';
 import { database } from '@/firebase/firebaseConfig';
 
@@ -22,6 +25,7 @@ const LiveControlPage = () => {
   const [showStatusMessage, setShowStatusMessage] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [metalDetected, setMetalDetected] = useState(null);
+  const [gpsLocation, setGpsLocation] = useState(null);
 
   useEffect(() => {
     if (status) {
@@ -57,6 +61,21 @@ const LiveControlPage = () => {
       setMetalDetected(snapshot.val());
     });
     return () => unsubscribeDetection();
+  }, []);
+
+  useEffect(() => {
+    const locationRef = ref(database, 'metal-detection-bot-2/location');
+    const unsubscribeLocation = onValue(locationRef, (snapshot) => {
+      const locationData = snapshot.val();
+      if (locationData && locationData.latitude && locationData.longitude) {
+        setGpsLocation({
+          latitude: locationData.latitude,
+          longitude: locationData.longitude,
+          timestamp: locationData.timestamp || Date.now()
+        });
+      }
+    });
+    return () => unsubscribeLocation();
   }, []);
 
   const sendCommand = async (command) => {
@@ -243,7 +262,7 @@ const LiveControlPage = () => {
                     <JoystickControl />
                   </div>
                   <Separator orientation="horizontal" className="h-full my-5" />
-                  <div className="flex items-center justify-center p-4">
+                  <div className="flex flex-col items-center justify-center p-4 space-y-4 w-full">
                     {metalDetected === null ? (
                       <Badge variant="outline" className="bg-gray-100 text-gray-700 border-gray-200 text-lg p-3">
                         <AlertTriangle size={24} className="mr-2" />
@@ -258,6 +277,63 @@ const LiveControlPage = () => {
                       <Badge variant="outline" className="bg-red-100 text-red-700 border-red-200 text-lg p-3">
                         <XCircle size={24} className="mr-2" />
                         No Metal Detected
+                      </Badge>
+                    )}
+                    
+                    {/* GPS Location Display - Always show latest location */}
+                    {gpsLocation ? (
+                      <div className="w-full max-w-2xl space-y-4">
+                        <Card>
+                          <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                              <MapPin className="h-5 w-5" />
+                              Current Location
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <span className="text-sm font-medium">Latitude:</span>
+                                <span className="text-sm text-gray-600">{gpsLocation.latitude.toFixed(6)}</span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-sm font-medium">Longitude:</span>
+                                <span className="text-sm text-gray-600">{gpsLocation.longitude.toFixed(6)}</span>
+                              </div>
+                            </div>
+                            
+                            {/* Google Maps Embed */}
+                            <div className="w-full h-64 rounded-lg overflow-hidden border">
+                              <iframe
+                                width="100%"
+                                height="100%"
+                                style={{ border: 0 }}
+                                loading="lazy"
+                                allowFullScreen
+                                referrerPolicy="no-referrer-when-downgrade"
+                                src={`https://maps.google.com/maps?q=${gpsLocation.latitude},${gpsLocation.longitude}&z=15&output=embed`}
+                              ></iframe>
+                            </div>
+                            
+                            {/* Open in Google Maps Button */}
+                            <Button
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => {
+                                const url = `https://www.google.com/maps?q=${gpsLocation.latitude},${gpsLocation.longitude}`;
+                                window.open(url, '_blank');
+                              }}
+                            >
+                              <ExternalLink className="h-4 w-4 mr-2" />
+                              Open in Google Maps
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    ) : (
+                      <Badge variant="outline" className="bg-yellow-100 text-yellow-700 border-yellow-200 text-sm p-2">
+                        <AlertTriangle size={16} className="mr-2" />
+                        Waiting for GPS location...
                       </Badge>
                     )}
                   </div>
