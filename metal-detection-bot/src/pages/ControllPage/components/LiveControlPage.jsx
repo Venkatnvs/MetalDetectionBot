@@ -26,6 +26,7 @@ const LiveControlPage = () => {
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [metalDetected, setMetalDetected] = useState(null);
   const [gpsLocation, setGpsLocation] = useState(null);
+  const [gpsStatus, setGpsStatus] = useState({ hasFix: false, satellites: 0, hdop: 99.9 });
 
   useEffect(() => {
     if (status) {
@@ -71,11 +72,29 @@ const LiveControlPage = () => {
         setGpsLocation({
           latitude: locationData.latitude,
           longitude: locationData.longitude,
-          timestamp: locationData.timestamp || Date.now()
+          timestamp: locationData.timestamp || Date.now(),
+          satellites: locationData.satellites || 0,
+          hdop: locationData.hdop || 99.9,
+          hasFix: locationData.hasFix !== undefined ? locationData.hasFix : true
         });
       }
     });
     return () => unsubscribeLocation();
+  }, []);
+
+  useEffect(() => {
+    const gpsStatusRef = ref(database, 'metal-detection-bot-2/gpsStatus');
+    const unsubscribeGpsStatus = onValue(gpsStatusRef, (snapshot) => {
+      const statusData = snapshot.val();
+      if (statusData) {
+        setGpsStatus({
+          hasFix: statusData.hasFix || false,
+          satellites: statusData.satellites || 0,
+          hdop: statusData.hdop || 99.9
+        });
+      }
+    });
+    return () => unsubscribeGpsStatus();
   }, []);
 
   const sendCommand = async (command) => {
@@ -280,62 +299,99 @@ const LiveControlPage = () => {
                       </Badge>
                     )}
                     
-                    {/* GPS Location Display - Always show latest location */}
-                    {gpsLocation ? (
-                      <div className="w-full max-w-2xl space-y-4">
-                        <Card>
-                          <CardHeader>
+                    {/* GPS Location Display - Always show latest location or status */}
+                    <div className="w-full max-w-2xl space-y-4">
+                      <Card>
+                        <CardHeader>
+                          <div className="flex items-center justify-between">
                             <CardTitle className="flex items-center gap-2">
                               <MapPin className="h-5 w-5" />
-                              Current Location
+                              GPS Location
                             </CardTitle>
-                          </CardHeader>
-                          <CardContent className="space-y-4">
-                            <div className="space-y-2">
-                              <div className="flex justify-between items-center">
-                                <span className="text-sm font-medium">Latitude:</span>
-                                <span className="text-sm text-gray-600">{gpsLocation.latitude.toFixed(6)}</span>
+                            {/* GPS Status Badge */}
+                            {gpsStatus.hasFix ? (
+                              <Badge variant="outline" className="bg-green-100 text-green-700 border-green-200">
+                                <Check size={14} className="mr-1" />
+                                GPS Fix ({gpsStatus.satellites} sats)
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="bg-yellow-100 text-yellow-700 border-yellow-200">
+                                <AlertTriangle size={14} className="mr-1" />
+                                No GPS Fix
+                              </Badge>
+                            )}
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          {gpsLocation ? (
+                            <>
+                              <div className="space-y-2">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-sm font-medium">Latitude:</span>
+                                  <span className="text-sm text-gray-600">{gpsLocation.latitude.toFixed(6)}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                  <span className="text-sm font-medium">Longitude:</span>
+                                  <span className="text-sm text-gray-600">{gpsLocation.longitude.toFixed(6)}</span>
+                                </div>
+                                {gpsLocation.satellites !== undefined && (
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-sm font-medium">Satellites:</span>
+                                    <span className="text-sm text-gray-600">{gpsLocation.satellites}</span>
+                                  </div>
+                                )}
+                                {gpsLocation.hdop !== undefined && (
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-sm font-medium">HDOP:</span>
+                                    <span className="text-sm text-gray-600">{gpsLocation.hdop.toFixed(2)}</span>
+                                  </div>
+                                )}
                               </div>
-                              <div className="flex justify-between items-center">
-                                <span className="text-sm font-medium">Longitude:</span>
-                                <span className="text-sm text-gray-600">{gpsLocation.longitude.toFixed(6)}</span>
+                              
+                              {/* Google Maps Embed */}
+                              <div className="w-full h-64 rounded-lg overflow-hidden border">
+                                <iframe
+                                  width="100%"
+                                  height="100%"
+                                  style={{ border: 0 }}
+                                  loading="lazy"
+                                  allowFullScreen
+                                  referrerPolicy="no-referrer-when-downgrade"
+                                  src={`https://maps.google.com/maps?q=${gpsLocation.latitude},${gpsLocation.longitude}&z=15&output=embed`}
+                                ></iframe>
                               </div>
+                              
+                              {/* Open in Google Maps Button */}
+                              <Button
+                                variant="outline"
+                                className="w-full"
+                                onClick={() => {
+                                  const url = `https://www.google.com/maps?q=${gpsLocation.latitude},${gpsLocation.longitude}`;
+                                  window.open(url, '_blank');
+                                }}
+                              >
+                                <ExternalLink className="h-4 w-4 mr-2" />
+                                Open in Google Maps
+                              </Button>
+                            </>
+                          ) : (
+                            <div className="text-center py-8 space-y-2">
+                              <AlertTriangle className="h-12 w-12 mx-auto text-yellow-500" />
+                              <p className="text-sm text-gray-600">
+                                {gpsStatus.hasFix 
+                                  ? "GPS fix acquired, waiting for location data..." 
+                                  : "GPS signal not available. The system will continue to work without GPS."}
+                              </p>
+                              {!gpsStatus.hasFix && gpsStatus.satellites > 0 && (
+                                <p className="text-xs text-gray-500">
+                                  Detected {gpsStatus.satellites} satellite(s) - acquiring fix...
+                                </p>
+                              )}
                             </div>
-                            
-                            {/* Google Maps Embed */}
-                            <div className="w-full h-64 rounded-lg overflow-hidden border">
-                              <iframe
-                                width="100%"
-                                height="100%"
-                                style={{ border: 0 }}
-                                loading="lazy"
-                                allowFullScreen
-                                referrerPolicy="no-referrer-when-downgrade"
-                                src={`https://maps.google.com/maps?q=${gpsLocation.latitude},${gpsLocation.longitude}&z=15&output=embed`}
-                              ></iframe>
-                            </div>
-                            
-                            {/* Open in Google Maps Button */}
-                            <Button
-                              variant="outline"
-                              className="w-full"
-                              onClick={() => {
-                                const url = `https://www.google.com/maps?q=${gpsLocation.latitude},${gpsLocation.longitude}`;
-                                window.open(url, '_blank');
-                              }}
-                            >
-                              <ExternalLink className="h-4 w-4 mr-2" />
-                              Open in Google Maps
-                            </Button>
-                          </CardContent>
-                        </Card>
-                      </div>
-                    ) : (
-                      <Badge variant="outline" className="bg-yellow-100 text-yellow-700 border-yellow-200 text-sm p-2">
-                        <AlertTriangle size={16} className="mr-2" />
-                        Waiting for GPS location...
-                      </Badge>
-                    )}
+                          )}
+                        </CardContent>
+                      </Card>
+                    </div>
                   </div>
                 </div>
               </div>

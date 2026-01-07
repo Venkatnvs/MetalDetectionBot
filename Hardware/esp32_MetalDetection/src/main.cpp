@@ -107,6 +107,13 @@ const unsigned long wifiCheckInterval = 30000;
 unsigned long lastGPSUpdateTime = 0;
 const unsigned long gpsUpdateInterval = 10000; // Update GPS every 10 seconds
 
+// GPS status tracking
+bool gpsHasFix = false;
+unsigned long lastValidGPSTime = 0;
+const unsigned long gpsTimeout = 30000; // Consider GPS lost after 30 seconds without valid data
+int gpsSatelliteCount = 0;
+float gpsHDOP = 99.9; // Horizontal Dilution of Precision (lower is better)
+
 // Debounce-related variables
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50; // in milliseconds
@@ -163,6 +170,8 @@ void sendDetectionTrue();
 void sendDetectionFalse();
 void updateGPS();
 void sendGPSLocation(float latitude, float longitude);
+void sendGPSStatus(bool hasFix, int satellites, float hdop);
+bool isGPSValid();
 
 void connectToFirebase() {
   // Configure Firebase
@@ -277,13 +286,17 @@ void loop() {
   server.handleClient();
   if (configMode) return;
 
-  // Update GPS data continuously
+  // Update GPS data continuously (optimized processing)
   updateGPS();
 
   // Periodically update GPS location to Firebase (saves only one latest location)
   if (millis() - lastGPSUpdateTime > gpsUpdateInterval) {
-    if (gps.location.isValid()) {
+    if (isGPSValid()) {
       sendGPSLocation(gps.location.lat(), gps.location.lng());
+    } else {
+      // Send GPS status even when no fix (so frontend knows GPS is not available)
+      sendGPSStatus(false, gpsSatelliteCount, gpsHDOP);
+      Serial.println("GPS: No valid fix available");
     }
     lastGPSUpdateTime = millis();
   }
@@ -307,11 +320,13 @@ void loop() {
         if (metalDetected) {
           Serial.println("Metal detected!");
           digitalWrite(BUZZER_PIN, HIGH);
-          // Also update GPS location immediately when metal is detected
-          if (gps.location.isValid()) {
+          // Also update GPS location immediately when metal is detected (if available)
+          if (isGPSValid()) {
             sendGPSLocation(gps.location.lat(), gps.location.lng());
           } else {
-            Serial.println("GPS location not valid yet");
+            Serial.println("GPS location not available - metal detection still recorded");
+            // Send GPS status to indicate no fix
+            sendGPSStatus(false, gpsSatelliteCount, gpsHDOP);
           }
           sendDetectionTrue();
         } else {
@@ -380,13 +395,45 @@ void sendDetectionFalse() {
 }
 
 void updateGPS() {
-  while (gpsSerial.available() > 0) {
-    if (gps.encode(gpsSerial.read())) {
+  // Process all available GPS data
+  unsigned long startTime = millis();
+  const unsigned long maxProcessingTime = 100; // Don't spend more than 100ms processing GPS
+  
+  while (gpsSerial.available() > 0 && (millis() - startTime < maxProcessingTime)) {
+    char c = gpsSerial.read();
+    if (gps.encode(c)) {
+      // Check if we have a valid fix
       if (gps.location.isValid()) {
-        // GPS data is valid, can be used
+        // Check fix quality and satellite count
+        gpsSatelliteCount = gps.satellites.value();
+        gpsHDOP = gps.hdop.hdop();
+        
+        // Consider GPS valid if we have at least 3 satellites and reasonable HDOP
+        bool wasValid = gpsHasFix;
+        gpsHasFix = (gpsSatelliteCount >= 3 && gpsHDOP < 10.0);
+        
+        if (gpsHasFix) {
+          lastValidGPSTime = millis();
+          if (!wasValid) {
+            Serial.printf("GPS fix acquired! Satellites: %d, HDOP: %.2f\n", gpsSatelliteCount, gpsHDOP);
+          }
+        }
+      } else {
+        // No valid location yet
+        gpsHasFix = false;
       }
     }
   }
+  
+  // Check if GPS signal is lost (timeout)
+  if (gpsHasFix && (millis() - lastValidGPSTime > gpsTimeout)) {
+    gpsHasFix = false;
+    Serial.println("GPS signal lost (timeout)");
+  }
+}
+
+bool isGPSValid() {
+  return gpsHasFix && gps.location.isValid() && (millis() - lastValidGPSTime < gpsTimeout);
 }
 
 void sendGPSLocation(float latitude, float longitude) {
@@ -401,12 +448,35 @@ void sendGPSLocation(float latitude, float longitude) {
   json.set("latitude", latitude);
   json.set("longitude", longitude);
   json.set("timestamp", millis());
+  json.set("satellites", gpsSatelliteCount);
+  json.set("hdop", gpsHDOP);
+  json.set("hasFix", gpsHasFix);
   
   if (Firebase.RTDB.setJSON(&fbdo, locationPath, &json)) {
-    Serial.printf("GPS location sent to Firebase: %.6f, %.6f\n", latitude, longitude);
+    Serial.printf("GPS location sent to Firebase: %.6f, %.6f (Sats: %d, HDOP: %.2f)\n", 
+                  latitude, longitude, gpsSatelliteCount, gpsHDOP);
   } else {
     Serial.printf("Failed to send GPS location to Firebase: %s\n", fbdo.errorReason().c_str());
   }
+  
+  // Also send GPS status separately
+  sendGPSStatus(gpsHasFix, gpsSatelliteCount, gpsHDOP);
+}
+
+void sendGPSStatus(bool hasFix, int satellites, float hdop) {
+  if (!Firebase.ready()) {
+    return;
+  }
+  String statusPath = mainPath;
+  statusPath += "/gpsStatus";
+  
+  FirebaseJson json;
+  json.set("hasFix", hasFix);
+  json.set("satellites", satellites);
+  json.set("hdop", hdop);
+  json.set("timestamp", millis());
+  
+  Firebase.RTDB.setJSON(&fbdo, statusPath, &json);
 }
 
 void processCommand(String command) {
