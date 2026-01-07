@@ -113,6 +113,10 @@ unsigned long lastValidGPSTime = 0;
 const unsigned long gpsTimeout = 30000; // Consider GPS lost after 30 seconds without valid data
 int gpsSatelliteCount = 0;
 float gpsHDOP = 99.9; // Horizontal Dilution of Precision (lower is better)
+unsigned long gpsStartTime = 0;
+bool gpsConfigured = false;
+unsigned long lastGPSReconfigTime = 0;
+const unsigned long gpsReconfigInterval = 300000; // Reconfigure GPS every 5 minutes if no fix
 
 // Debounce-related variables
 unsigned long lastDebounceTime = 0;
@@ -172,6 +176,8 @@ void updateGPS();
 void sendGPSLocation(float latitude, float longitude);
 void sendGPSStatus(bool hasFix, int satellites, float hdop);
 bool isGPSValid();
+void configureGPS();
+void sendNMEACommand(String command);
 
 void connectToFirebase() {
   // Configure Firebase
@@ -278,6 +284,15 @@ void setup() {
   // Initialize GPS
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
   Serial.println("GPS initialized on Serial2");
+  
+  // Wait a bit for GPS to initialize
+  delay(1000);
+  
+  // Configure GPS for faster fix acquisition
+  configureGPS();
+  gpsConfigured = true;
+  gpsStartTime = millis();
+  lastGPSReconfigTime = millis();
 
   Serial.println("Starting main loop...");
 }
@@ -297,6 +312,13 @@ void loop() {
       // Send GPS status even when no fix (so frontend knows GPS is not available)
       sendGPSStatus(false, gpsSatelliteCount, gpsHDOP);
       Serial.println("GPS: No valid fix available");
+      
+      // If GPS has been running for more than 5 minutes without fix, try reconfiguring
+      if (millis() - lastGPSReconfigTime > gpsReconfigInterval) {
+        Serial.println("GPS: Attempting to reconfigure for better signal...");
+        configureGPS();
+        lastGPSReconfigTime = millis();
+      }
     }
     lastGPSUpdateTime = millis();
   }
@@ -434,6 +456,98 @@ void updateGPS() {
 
 bool isGPSValid() {
   return gpsHasFix && gps.location.isValid() && (millis() - lastValidGPSTime < gpsTimeout);
+}
+
+void sendNMEACommand(String command) {
+  // Calculate checksum for NMEA command
+  uint8_t checksum = 0;
+  for (int i = 1; i < command.length(); i++) {
+    if (command[i] == '*') break;
+    checksum ^= command[i];
+  }
+  
+  // Format: $COMMAND*CHECKSUM\r\n
+  String fullCommand = command + "*";
+  if (checksum < 16) fullCommand += "0";
+  fullCommand += String(checksum, HEX);
+  fullCommand.toUpperCase();
+  fullCommand += "\r\n";
+  
+  gpsSerial.print(fullCommand);
+  Serial.print("GPS Config: ");
+  Serial.print(fullCommand);
+  delay(100); // Small delay between commands
+}
+
+void configureGPS() {
+  Serial.println("Configuring GPS for faster fix acquisition...");
+  
+  // Wait a bit more for GPS module to be ready
+  delay(500);
+  
+  // Clear any pending data
+  while (gpsSerial.available() > 0) {
+    gpsSerial.read();
+  }
+  
+  // 1. Set update rate to 10Hz (10 updates per second) - faster acquisition
+  // PMTK_SET_NMEA_UPDATE_RATE_10HZ (100ms = 10Hz)
+  sendNMEACommand("$PMTK220,100");
+  
+  // 2. Set NMEA sentence output frequency
+  // Enable GGA (Global Positioning System Fix Data) - most important for location
+  // Enable RMC (Recommended Minimum Specific GNSS Data)
+  // PMTK_SET_NMEA_OUTPUT_RMCGGA - RMC and GGA only (reduces data load, faster processing)
+  sendNMEACommand("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+  
+  // 3. Enable hot start mode for faster acquisition (uses last known position)
+  // PMTK_SET_HOT_START
+  sendNMEACommand("$PMTK101");
+  
+  // 4. Set dynamic platform model to "Portable" (better for moving objects)
+  // PMTK_SET_NAV_SPEED_THRESHOLD - allows faster position updates
+  sendNMEACommand("$PMTK386,0.2");
+  
+  // 5. Enable SBAS (Satellite-Based Augmentation System) for better accuracy and faster fix
+  // PMTK_ENABLE_SBAS
+  sendNMEACommand("$PMTK313,1");
+  
+  // 6. Enable WAAS (Wide Area Augmentation System) if available
+  // PMTK_ENABLE_WAAS - improves accuracy and can help with faster fix
+  sendNMEACommand("$PMTK301,2");
+  
+  // 7. Set SBAS search mode - allows using weaker signals for faster acquisition
+  // PMTK_SET_SBAS_SEARCH_MODE
+  sendNMEACommand("$PMTK319,0");
+  
+  // 8. Disable power save mode for faster response and continuous tracking
+  // PMTK_SET_POWER_SAVE_MODE - 0 = normal mode (no power saving)
+  sendNMEACommand("$PMTK225,0");
+  
+  // 9. Set fix interval (continuous tracking, no sleep)
+  // PMTK_API_SET_FIX_CTL - 100ms fix interval, continuous
+  sendNMEACommand("$PMTK300,100,0,0,0,0");
+  
+  // 10. Enable DGPS (Differential GPS) mode for better accuracy
+  // PMTK_API_SET_DGPS_MODE - 2 = WAAS enabled
+  // (Already set above with PMTK301,2)
+  
+  // 11. Request hot start again to ensure fast acquisition
+  // PMTK_CMD_HOT_START - uses last known position for faster fix
+  sendNMEACommand("$PMTK101");
+  
+  Serial.println("GPS configuration complete!");
+  Serial.println("Waiting for GPS fix...");
+  Serial.println("Note: First fix may take 30-60 seconds (cold start)");
+  Serial.println("Subsequent fixes will be much faster (hot start)");
+  
+  // Give GPS time to process commands
+  delay(500);
+  
+  // Clear buffer again after configuration
+  while (gpsSerial.available() > 0) {
+    gpsSerial.read();
+  }
 }
 
 void sendGPSLocation(float latitude, float longitude) {
